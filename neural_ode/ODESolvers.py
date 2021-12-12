@@ -34,7 +34,6 @@ class ODESolvertf:
             n_step = int(kwargs['n_step'])
             step_size = dT / n_step
         if 'x_external' in kwargs.keys():
-            extr_flag = True
             add_args = [kwargs['x_external']]
         else:
             add_args = []
@@ -45,9 +44,9 @@ class ODESolvertf:
         sol_list = []
         sol_list.append(y0)
         err_list = []
-        # sol_list - список тензоров
+        # sol_list - list of tensors
         for i in range(n_step):
-            # на вход модели должны поступать тензоры размером [n_p, N]
+            # tensor shape should be [1, N]
             y_curr = sol_list[i]
             y_next, err_estimation = self.step_calculate(ode_fun, sol_dict['t'][i:i+2], y_curr,
                                                          step_size, *add_args)

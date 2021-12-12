@@ -89,7 +89,7 @@ class NeuralODE:
         else:
             return self.model(x)
 
-    def pretrain(self, t_scale=5.0, step_size=0.1, n_epoch=10,
+    def pretrain(self, t_scale=5.0, step_size=0.1, n_epoch=10, external_scale = 0.1,
                  opt=tf.keras.optimizers.Adam(learning_rate=0.05)):
         """
         Method to pretrain model so it's solution is decaying over time
@@ -101,13 +101,18 @@ class NeuralODE:
         """
         t_span = tf.constant([0.0, t_scale], dtype=tf.float64)
         y0 = tf.ones((1, self.n_dynamic), dtype=tf.float64) * 0.1
-        print(y0)
+        if self.n_external > 0:
+            x_external_interp = \
+                lambda t: tf.ones((1, self.n_external), dtype=tf.float64) * external_scale
+            dict_external = {'x_external': x_external_interp}
+        else:
+            dict_external = {}
         for i in range(n_epoch):
             with tf.GradientTape() as tape:
-                sol, _ = self.solver(self.ode_wrap, t_span, y0, step_size=step_size)
+                sol, _ = self.solver(self.ode_wrap, t_span, y0,
+                                     step_size=step_size, **dict_external)
                 y_pred = sol['y'][-1, :]
                 loss = self.loss_func(tf.zeros((1, self.n_dynamic), dtype=tf.float64), y_pred)
-            print(y_pred)
             dL_dp = tape.gradient(loss, self.model.trainable_variables)
             opt.apply_gradients(zip(dL_dp, self.model.trainable_variables))
 
@@ -204,7 +209,7 @@ class NeuralODE:
         :return:
         """
         with tf.GradientTape() as tape:
-            sol, _ = self.forward_solve(t_eval, y_target[0, :], **kwargs)
+            sol = self.forward_solve(t_eval, y_target[0, :], **kwargs)
             y_pred = sol['y'][::self.n_ref, :]
             loss = self.loss_func(y_target, y_pred)
         dL_dp = tape.gradient(loss, self.model.trainable_variables)
@@ -227,7 +232,8 @@ class NeuralODE:
             if 'x_external' in kwargs.keys():
                 x_external = kwargs['x_external']
                 # create interpolation
-                x_external_interp_np = interp1d(t_eval.numpy(), x_external.numpy(), kind='linear', axis=0)
+                x_external_interp_np = interp1d(t_eval.numpy(),
+                                                x_external.numpy(), kind='linear', axis=0)
                 x_external_interp = lambda t: tf.expand_dims(tf.constant(x_external_interp_np(t)), axis=0)
                 dict_external = {'x_external': x_external_interp}
             else:
@@ -255,12 +261,14 @@ class NeuralODE:
             for ix_train in ix_list:
                 if adjoint_method:
                     loss, dL_dy, a = self.adjoint_method(tf.gather(t_eval, indices=ix_train),
-                                                         tf.gather(y_target, indices=ix_train), **dict_external)
+                                                         tf.gather(y_target, indices=ix_train),
+                                                         **dict_external)
                     grads_p = a[0, self.n_dynamic:]
                     grads_list = self.unflatten_param(grads_p)
                 else:
                     loss, grads_list = self.usual_method(tf.gather(t_eval, indices=ix_train),
-                                                         tf.gather(y_target, indices=ix_train), **dict_external)
+                                                         tf.gather(y_target, indices=ix_train),
+                                                         **dict_external)
                 epoch_loss += loss
                 opt.apply_gradients(zip(grads_list, self.model.trainable_variables))
                 # print('Batch finished')
