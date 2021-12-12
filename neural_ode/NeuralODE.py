@@ -1,7 +1,5 @@
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
-from scipy.integrate import solve_ivp
 from scipy.interpolate import interp1d
 
 from sklearn.model_selection import KFold
@@ -12,61 +10,14 @@ import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers
 
-
-def trapezoid_tf(fun, tspan, y0, **kwargs):
-    """
-    Heun's method for integrating in tensorflow
-    :param fun:
-    :param tspan:
-    :param y0:
-    :param kwargs:
-    :return:
-    """
-    N = tf.size(y0)
-    dT = tspan[1] - tspan[0]
-    if 'step_size' in kwargs.keys():
-        n_step = int(tf.math.ceil(tf.abs(dT)/kwargs['step_size']) )
-        step_size = dT/n_step
-    elif 'n_step' in kwargs.keys():
-        n_step = int(kwargs['n_step'])
-        step_size = dT/n_step
-    if 'x_external' in kwargs.keys():
-        extr_flag = True
-        x_external = kwargs['x_external']
-    else:
-        extr_flag = False
-    N_p = n_step+int(1)
-    sol_dict = {}
-    sol_dict['t'] = tf.linspace(tspan[0], tspan[1], N_p)
-    #
-    sol_list = []
-    sol_list.append(y0)
-    err_list = []
-    # sol_list - список тензоров
-    for i in range(n_step):
-        # на вход модели должны поступать тензоры размером [n_p, N]
-        y_curr = sol_list[i]
-        if extr_flag:
-            y_pr = sol_list[i]+step_size*fun(sol_dict['t'][i], y_curr, x_external(sol_dict['t'][i]))
-            y_corr = sol_list[i]+\
-                step_size/2*( fun(sol_dict['t'][i], y_curr, x_external(sol_dict['t'][i]))+\
-                              fun(sol_dict['t'][i+1], y_pr, x_external(sol_dict['t'][i+1])) )
-        else:
-            y_pr = sol_list[i]+step_size*fun(sol_dict['t'][i], y_curr)
-            y_corr = sol_list[i]+step_size/2*(fun(sol_dict['t'][i], y_curr)+fun(sol_dict['t'][i+1], y_pr))
-        sol_list.append(y_corr)
-        err_list.append(tf.norm(y_corr-y_pr))
-    sol_dict['y'] = tf.concat(sol_list, axis=0)
-    #err_list = tf.stack(err_list, axis=0)
-    #plt.plot(sol_dict['t'][1:].numpy(), err_list.numpy())
-    return sol_dict
+from neural_ode.ODESolvers import HeunsMethod
 
 
 class NeuralODE:
 
     def __init__(self, model, n_dynamic,
                  n_external=int(0), n_ref=int(2),
-                 loss_func=tf.keras.losses.MeanSquaredError(), solver=trapezoid_tf):
+                 loss_func=tf.keras.losses.MeanSquaredError(), solver=HeunsMethod()):
         self.model = model  # model, should change
         self.n_var = int(sum([tf.size(var) for var in model.variables]))  # number of variables
         self.loss_func = loss_func  # loss funcs, later
@@ -133,7 +84,8 @@ class NeuralODE:
         :return:
         """
         if self.n_external > 0:
-            return self.model(tf.concat([x, args[0]], axis=1))
+            external_arg = args[0](t)
+            return self.model(tf.concat([x, external_arg], axis=1))
         else:
             return self.model(x)
 
@@ -152,7 +104,7 @@ class NeuralODE:
         print(y0)
         for i in range(n_epoch):
             with tf.GradientTape() as tape:
-                sol = self.solver(self.ode_wrap, t_span, y0, step_size=step_size)
+                sol, _ = self.solver(self.ode_wrap, t_span, y0, step_size=step_size)
                 y_pred = sol['y'][-1, :]
                 loss = self.loss_func(tf.zeros((1, self.n_dynamic), dtype=tf.float64), y_pred)
             print(y_pred)
@@ -171,7 +123,7 @@ class NeuralODE:
             y0 = tf.expand_dims(y0, axis=0)
         step_size = (t_eval[1] - t_eval[0]) / self.n_ref
         t_span = tf.concat((t_eval[0], t_eval[-1]), axis=0)
-        sol = self.solver(self.ode_wrap, t_span, y0, step_size=step_size, **kwargs)
+        sol, _ = self.solver(self.ode_wrap, t_span, y0, step_size=step_size, **kwargs)
         return sol
 
     def construct_aug_dyn(self, sol, **kwargs):
@@ -201,7 +153,6 @@ class NeuralODE:
             z_adj0 = z_adj[:, 0:self.n_dynamic]
             dz_adj = tf.concat((-tf.matmul(z_adj0, df_dy), -tf.matmul(z_adj0, df_dp)), axis=1)
             return dz_adj
-
         return func
 
     def backward_solve(self, t_eval, dL_dy, aug_dyn):
@@ -218,7 +169,7 @@ class NeuralODE:
         for i in range(len(t_eval) - 1):
             step_size = (t_eval[-1 - i] - t_eval[-2 - i]) / self.n_ref
             t_span = tf.concat((t_eval[-1 - i], t_eval[-2 - i]), axis=0)
-            sol_b = self.solver(aug_dyn, t_span, y_adj0, step_size=step_size)
+            sol_b, _ = self.solver(aug_dyn, t_span, y_adj0, step_size=step_size)
             # update
             y_adj0.assign(tf.expand_dims(sol_b['y'][-1, :], axis=0))
             y_adj0[:, 0:self.n_dynamic].assign(y_adj0[:, 0:self.n_dynamic] + dL_dy[-2 - i, :])
@@ -253,7 +204,7 @@ class NeuralODE:
         :return:
         """
         with tf.GradientTape() as tape:
-            sol = self.forward_solve(t_eval, y_target[0, :], **kwargs)
+            sol, _ = self.forward_solve(t_eval, y_target[0, :], **kwargs)
             y_pred = sol['y'][::self.n_ref, :]
             loss = self.loss_func(y_target, y_pred)
         dL_dp = tape.gradient(loss, self.model.trainable_variables)
