@@ -8,18 +8,18 @@ from tensorflow import keras
 from tensorflow.keras import layers
 
 def Newtons_method(y0, resid, jac, **opts):
-    opts_default = {'max_iter': int(20), 'f_tol': tf.constant(1e-6, dtype=tf.float64)}
+    opts_default = {'max_iter': int(1), 'f_tol': tf.constant(1e-6, dtype=tf.float64)}
     opts_default.update(**opts)
     finished = False
     iter = int(0)
-    resid_curr = resid(y0)
-    jac_curr = jac(y0)
+    resid_curr = tf.transpose(resid(y0))
+    jac_curr = tf.transpose(jac(y0))
     y1 = y0
     while not finished:
-        dy = tf.linalg.solve(-tf.transpose(jac_curr), tf.transpose(resid_curr) )
+        dy = tf.linalg.solve(jac_curr, -resid_curr)
         y1 = y1 + tf.transpose(dy)
-        resid_curr = resid(y1)
-        jac_curr = jac(y1)
+        resid_curr = tf.transpose(resid(y1))
+        jac_curr = tf.transpose(jac(y1))
         iter += 1
         if tf.norm(resid_curr) < opts_default['f_tol']:
             finished = True
@@ -113,8 +113,8 @@ class BackwardEulerMethod(ODESolvertf):
 
     def step_calculate(self, ode_fun, t, y, step_size, *add_args, **kwargs):
         y_pr = y + step_size * ode_fun(t[0], y, *add_args)
-        resid = lambda x: x - y - step_size*ode_fun(t[1], x, *add_args)
-        jac_solv = lambda x: -tf.eye(len(y), dtype=tf.float64) - step_size*kwargs['jac'](x)
+        resid = lambda x: y + step_size*ode_fun(t[1], x, *add_args) - x
+        jac_solv = lambda x: step_size*kwargs['jac'](x) - tf.eye(len(y), dtype=tf.float64)
         y_corr = Newtons_method(y_pr, resid, jac_solv)
         err_estimation = tf.zeros(tf.shape(y))
         return y_corr, err_estimation
