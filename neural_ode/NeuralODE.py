@@ -106,7 +106,7 @@ class NeuralODE:
             x_external_interp = \
                 lambda t: tf.ones((1, self.n_external), dtype=tf.float64) * external_scale
             kwargs = {'x_external': x_external_interp}
-        # TODO: add implicit solver for external forcing (grad_params!)
+        # TODO: add implicit solver for external forcing (grad_inps!)
         if self.solver.is_implicit:
             def jac1(y):
                 J = self.grad_inps(y)
@@ -133,7 +133,7 @@ class NeuralODE:
             y0 = tf.expand_dims(y0, axis=0)
         step_size = (t_eval[1] - t_eval[0]) / self.n_ref
         t_span = tf.concat((t_eval[0], t_eval[-1]), axis=0)
-        # TODO: add implicit solver for external forcing (grad_params!)
+        # TODO: add implicit solver for external forcing (grad_inps!)
         if self.solver.is_implicit:
             def jac1(y):
                 J = self.grad_inps(y)
