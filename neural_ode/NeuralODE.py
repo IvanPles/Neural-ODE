@@ -101,16 +101,21 @@ class NeuralODE:
         """
         t_span = tf.constant([0.0, t_scale], dtype=tf.float64)
         y0 = tf.ones((1, self.n_dynamic), dtype=tf.float64) * 0.1
+        kwargs = {}
         if self.n_external > 0:
             x_external_interp = \
                 lambda t: tf.ones((1, self.n_external), dtype=tf.float64) * external_scale
-            dict_external = {'x_external': x_external_interp}
-        else:
-            dict_external = {}
+            kwargs = {'x_external': x_external_interp}
+        # TODO: add implicit solver for external forcing (grad_params!)
+        if self.solver.is_implicit:
+            def jac1(y):
+                J = self.grad_inps(y)
+                return J[0, :, :]
+            kwargs['jac'] = jac1
         for i in range(n_epoch):
             with tf.GradientTape() as tape:
                 sol, _ = self.solver(self.ode_wrap, t_span, y0,
-                                     step_size=step_size, **dict_external)
+                                     step_size=step_size, **kwargs)
                 y_pred = sol['y'][-1, :]
                 loss = self.loss_func(tf.zeros((1, self.n_dynamic), dtype=tf.float64), y_pred)
             dL_dp = tape.gradient(loss, self.model.trainable_variables)
@@ -128,6 +133,14 @@ class NeuralODE:
             y0 = tf.expand_dims(y0, axis=0)
         step_size = (t_eval[1] - t_eval[0]) / self.n_ref
         t_span = tf.concat((t_eval[0], t_eval[-1]), axis=0)
+        # TODO: add implicit solver for external forcing (grad_params!)
+        if self.solver.is_implicit:
+            def jac1(y):
+                J = self.grad_inps(y)
+                return J[0, :, :]
+            print(kwargs.keys())
+            kwargs['jac'] = jac1
+            print(kwargs.keys())
         sol, _ = self.solver(self.ode_wrap, t_span, y0, step_size=step_size, **kwargs)
         return sol
 
