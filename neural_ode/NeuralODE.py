@@ -13,6 +13,8 @@ from tensorflow.keras import layers
 from neural_ode.ODESolvers import HeunsMethod
 
 
+# TODO: add missing variable, add derivatives
+# also add derivatives relative to initial condition
 class NeuralODE:
 
     def __init__(self, model, n_dynamic,
@@ -28,33 +30,70 @@ class NeuralODE:
 
     @tf.function
     def grad_inps(self, x):
-        """
-        Method to calculate jacobians of dynamical input - output
-        :param x:
-        :return:
-        """
+        #
         with tf.GradientTape() as tape:
             tape.watch(x)
             y = self.model(x)
         J = tape.batch_jacobian(y, x)
-        return J[:, :, 0:self.n_dynamic]
+        return J
 
     @tf.function
     def grad_params(self, x):
+        #
+        with tf.GradientTape() as tape:
+            y = self.model(x)
+        J_list = tape.jacobian(y, self.model.variables)
+        return J_list
+
+    def grad_inps_wrap(self, t, x, *args, batch=False):
+        """
+        Method to calculate jacobian of dynamical input - output
+        :param t:
+        :param x: dynamical input
+        :param batch: if True, retain all batches and output will be [n_batch, ..., ...]
+        if False, only first batch will remain and output will be [..., ...]
+        :param args: list additional arguments,
+        if there is external forcing then should have function for this forcing
+        :return: jacobian for dynamical inputs only
+        """
+        # concatenate if have external forcing
+        if self.n_external > 0:
+            x_total = tf.concat([x, args[0](t)], axis=1)
+        else:
+            x_total = x
+        J = self.grad_inps(x_total)
+        # if dont need batches get rid of first dimension
+        if batch:
+            return J[:, :, 0:self.n_dynamic]
+        else:
+            return J[0, :, 0:self.n_dynamic]
+
+    def grad_params_wrap(self, t, x, *args, batch=False):
         """
         Method to calculate jacobians of outputs to parameters
         And flatten them
+        :param t:
         :param x:
-        :return:
+        :param batch:
+        :param args: list additional arguments,
+        if there is external forcing then should have function for this forcing
+        :return: jacobian for dynamical parameters
         """
-        with tf.GradientTape() as tape:
-            y = self.model(x)
+        # concatenate if have external forcing
+        if self.n_external > 0:
+            x_total = tf.concat([x, args[0](t)], axis=1)
+        else:
+            x_total = x
+        J_list = self.grad_params(x_total)
         npoints = tf.shape(x)[0]
         x_sh = self.n_dynamic
-        J_list = tape.jacobian(y, self.model.variables)
         J_flatten = [tf.reshape(item, (npoints, x_sh, tf.size(item) // (x_sh * npoints))) for item in J_list]
         J_flatten = tf.concat(J_flatten, axis=2)
-        return J_flatten
+        # if dont need batches get rid of first dimension
+        if batch:
+            return J_flatten
+        else:
+            return J_flatten[0, :, :]
 
     def unflatten_param(self, p) -> list:
         """
@@ -78,10 +117,11 @@ class NeuralODE:
     def ode_wrap(self, t, x, *args):
         """
         Wrapper for ode solver
-        :param t:
-        :param x:
-        :param args:
-        :return:
+        :param t: time. in our case just a placeholder
+        :param x: dynamical inputs
+        :param args: list additional arguments,
+        if there is external forcing then should have function for this forcing
+        :return: Value of derivatives according to model
         """
         if self.n_external > 0:
             external_arg = args[0](t)
@@ -89,7 +129,7 @@ class NeuralODE:
         else:
             return self.model(x)
 
-    def pretrain(self, t_scale=5.0, step_size=0.1, n_epoch=10, external_scale = 0.1,
+    def pretrain(self, t_scale=5.0, step_size=0.1, n_epoch=10, external_scale=0.1,
                  opt=tf.keras.optimizers.Adam(learning_rate=0.05)):
         """
         Method to pretrain model so it's solution is decaying over time
@@ -105,13 +145,10 @@ class NeuralODE:
         if self.n_external > 0:
             x_external_interp = \
                 lambda t: tf.ones((1, self.n_external), dtype=tf.float64) * external_scale
-            kwargs = {'x_external': x_external_interp}
-        # TODO: add implicit solver for external forcing (grad_inps!)
+            kwargs['x_external'] = x_external_interp
+        #
         if self.solver.is_implicit:
-            def jac1(y):
-                J = self.grad_inps(y)
-                return J[0, :, :]
-            kwargs['jac'] = jac1
+            kwargs['jac'] = self.grad_inps_wrap
         for i in range(n_epoch):
             with tf.GradientTape() as tape:
                 sol, _ = self.solver(self.ode_wrap, t_span, y0,
@@ -133,47 +170,22 @@ class NeuralODE:
             y0 = tf.expand_dims(y0, axis=0)
         step_size = (t_eval[1] - t_eval[0]) / self.n_ref
         t_span = tf.concat((t_eval[0], t_eval[-1]), axis=0)
-        # TODO: add implicit solver for external forcing (grad_inps!)
+        #
         if self.solver.is_implicit:
-            def jac1(y):
-                J = self.grad_inps(y)
-                return J[0, :, :]
-            print(kwargs.keys())
-            kwargs['jac'] = jac1
-            print(kwargs.keys())
+            kwargs['jac'] = self.grad_inps_wrap
         sol, _ = self.solver(self.ode_wrap, t_span, y0, step_size=step_size, **kwargs)
         return sol
 
-    def construct_aug_dyn(self, sol, **kwargs):
-        """
-        Method to construct augmented dynamics function for adjoint method
-        :param sol:
-        :param kwargs:
-        :return:
-        """
-        # make interpolation of sol
-        sol_np = interp1d(sol['t'].numpy(), sol['y'].numpy(), kind='linear', axis=0)
-        sol_interp = lambda t: tf.expand_dims(tf.constant(sol_np(t)), axis=0)
 
-        def func(t, z_adj):
-            y_interp = sol_interp(t)
-            if 'x_external' in kwargs.keys():
-                x_ext = kwargs['x_external'](t)
-                y_total = tf.concat([y_interp, x_ext], axis=1)
-                df_dy = self.grad_inps(y_total)
-                df_dp = self.grad_params(y_total)
-            else:
-                df_dy = self.grad_inps(y_interp)
-                df_dp = self.grad_params(y_interp)
-            # get rid of first dimension
-            df_dy = df_dy[0, :, :]
-            df_dp = df_dp[0, :, :]
-            z_adj0 = z_adj[:, 0:self.n_dynamic]
-            dz_adj = tf.concat((-tf.matmul(z_adj0, df_dy), -tf.matmul(z_adj0, df_dp)), axis=1)
-            return dz_adj
-        return func
+    def aug_dyn(self, t, z_adj, sol_interp, *args):
+        y_interp = sol_interp(t)
+        df_dy = self.grad_inps_wrap(t, y_interp, *args)
+        df_dp = self.grad_params_wrap(t, y_interp, *args)
+        z_adj0 = z_adj[:, 0:self.n_dynamic]
+        dz_adj = tf.concat((-tf.matmul(z_adj0, df_dy), -tf.matmul(z_adj0, df_dp)), axis=1)
+        return dz_adj
 
-    def backward_solve(self, t_eval, dL_dy, aug_dyn):
+    def backward_solve(self, t_eval, dL_dy, aug_dyn, **kwargs):
         """
         Backward solution for adjoint method
         :param t_eval:
@@ -187,7 +199,7 @@ class NeuralODE:
         for i in range(len(t_eval) - 1):
             step_size = (t_eval[-1 - i] - t_eval[-2 - i]) / self.n_ref
             t_span = tf.concat((t_eval[-1 - i], t_eval[-2 - i]), axis=0)
-            sol_b, _ = self.solver(aug_dyn, t_span, y_adj0, step_size=step_size)
+            sol_b, _ = self.solver(aug_dyn, t_span, y_adj0, step_size=step_size, **kwargs)
             # update
             y_adj0.assign(tf.expand_dims(sol_b['y'][-1, :], axis=0))
             y_adj0[:, 0:self.n_dynamic].assign(y_adj0[:, 0:self.n_dynamic] + dL_dy[-2 - i, :])
@@ -209,8 +221,11 @@ class NeuralODE:
             tape.watch(y_pred)
             loss = self.loss_func(y_target, y_pred)
         dL_dy = tape.gradient(loss, y_pred)
-        aug_dyn_fun = self.construct_aug_dyn(sol, **kwargs)
-        a = self.backward_solve(t_eval, dL_dy, aug_dyn_fun)
+        #
+        sol_np = interp1d(sol['t'].numpy(), sol['y'].numpy(), kind='linear', axis=0)
+        sol_interp = lambda t: tf.expand_dims(tf.constant(sol_np(t)), axis=0)
+        aug_dyn_fun = lambda t, z, *args: self.aug_dyn(t, z, sol_interp, *args)
+        a = self.backward_solve(t_eval, dL_dy, aug_dyn_fun, **kwargs)
         return loss, dL_dy, a
 
     def usual_method(self, t_eval, y_target, **kwargs):
