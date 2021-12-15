@@ -13,8 +13,7 @@ from tensorflow.keras import layers
 from neural_ode.ODESolvers import HeunsMethod
 
 
-# TODO: add missing variable, add derivatives
-# also add derivatives relative to initial condition
+# TODO: add missing variable, add derivatives, also add derivatives relative to initial condition
 class NeuralODE:
 
     def __init__(self, model, n_dynamic,
@@ -293,11 +292,13 @@ class NeuralODE:
             ix_list = [ix_train for __, ix_train in kf.split(t_eval)]
         else:
             ix_list = [np.arange(0, len(t_eval))]
-        # missing data implementation ?
+        # ToDo missing data implementation ?
         if missing_data:
             add_init = []
             for ix_train in ix_list:
-                add_init = [tf.Variable(y_target[ix_train[1]])]
+                ix = 0
+                add_init = \
+                    [tf.Variable(y_target[ix_train[1], ix]) - tf.Variable(y_target[ix_train[0], ix])]
         loss_list = []
         # start epochs
         t_tot = time.time()
