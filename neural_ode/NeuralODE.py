@@ -129,13 +129,14 @@ class NeuralODE:
         else:
             return self.model(x)
 
-    def pretrain(self, t_scale=5.0, step_size=0.1, n_epoch=10, external_scale=0.1,
+    def pretrain(self, t_scale=5.0, step_size=0.1, n_epoch=10, external_scale=0.0,
                  opt=tf.keras.optimizers.Adam(learning_rate=0.05)):
         """
         Method to pretrain model so it's solution is decaying over time
         :param t_scale:
         :param step_size:
         :param n_epoch:
+        :param external_scale:
         :param opt:
         :return:
         """
@@ -178,6 +179,14 @@ class NeuralODE:
 
 
     def aug_dyn(self, t, z_adj, sol_interp, *args):
+        """
+        Augmented dynamic function for backward integration
+        :param t: time
+        :param z_adj: adjoint vector state
+        :param sol_interp: interpolation of solution to calculate derivatives of adjoint state
+        :param args: additional argument should include external forcing function if needed
+        :return: derivative of adjoint state
+        """
         y_interp = sol_interp(t)
         df_dy = self.grad_inps_wrap(t, y_interp, *args)
         df_dp = self.grad_params_wrap(t, y_interp, *args)
@@ -223,6 +232,7 @@ class NeuralODE:
         dL_dy = tape.gradient(loss, y_pred)
         #
         sol_np = interp1d(sol['t'].numpy(), sol['y'].numpy(), kind='linear', axis=0)
+        # input for interpolation function should be zero size tensor
         sol_interp = lambda t: tf.expand_dims(tf.constant(sol_np(t)), axis=0)
         aug_dyn_fun = lambda t, z, *args: self.aug_dyn(t, z, sol_interp, *args)
         a = self.backward_solve(t_eval, dL_dy, aug_dyn_fun, **kwargs)
@@ -236,6 +246,10 @@ class NeuralODE:
         :param kwargs:
         :return:
         """
+        if missing_data:
+            print('lol')
+        else:
+            y0 = y_target[0, :]
         with tf.GradientTape() as tape:
             sol = self.forward_solve(t_eval, y_target[0, :], **kwargs)
             y_pred = sol['y'][::self.n_ref, :]
@@ -244,7 +258,7 @@ class NeuralODE:
         return loss, dL_dp
 
     def fit(self, t_eval, y_target, n_epoch=20, n_fold=5, adjoint_method=False,
-            opt=tf.keras.optimizers.Adam(learning_rate=0.05), **kwargs):
+            opt=tf.keras.optimizers.Adam(learning_rate=0.05), missing_data = [], **kwargs):
         """
         Method to fit model to target data
         :param t_eval:
@@ -253,6 +267,7 @@ class NeuralODE:
         :param n_fold:
         :param adjoint_method:
         :param opt:
+        :param missing_data:
         :param kwargs:
         :return:
         """
@@ -262,6 +277,7 @@ class NeuralODE:
                 # create interpolation
                 x_external_interp_np = interp1d(t_eval.numpy(),
                                                 x_external.numpy(), kind='linear', axis=0)
+                # input for interpolation function should be zero size tensor
                 x_external_interp = lambda t: tf.expand_dims(tf.constant(x_external_interp_np(t)), axis=0)
                 dict_external = {'x_external': x_external_interp}
             else:
@@ -277,6 +293,11 @@ class NeuralODE:
             ix_list = [ix_train for __, ix_train in kf.split(t_eval)]
         else:
             ix_list = [np.arange(0, len(t_eval))]
+        # missing data implementation ?
+        if missing_data:
+            add_init = []
+            for ix_train in ix_list:
+                add_init = [tf.Variable(y_target[ix_train[1]])]
         loss_list = []
         # start epochs
         t_tot = time.time()

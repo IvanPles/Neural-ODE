@@ -136,7 +136,23 @@ class BackwardEulerMethod(ODESolvertf):
     def step_calculate(self, ode_fun, t, y, step_size, *args, **kwargs):
         y_pr = y + step_size * ode_fun(t[0], y, *args)
         resid = lambda x: y + step_size*ode_fun(t[1], x, *args) - x
-        jac_solv = lambda x: step_size*kwargs['jac'](t, x, *args) - tf.eye(tf.size(y), dtype=tf.float64)
+        jac_solv = lambda x: step_size*kwargs['jac'](t[1], x, *args) - tf.eye(tf.size(y), dtype=tf.float64)
+        y_corr = newtons_method(y_pr, resid, jac_solv)
+        err_estimation = tf.zeros(tf.shape(y))
+        return y_corr, err_estimation
+
+
+class TrapezoidRuleMethod(ODESolvertf):
+
+    def __init__(self):
+        self.is_implicit = True
+        self.is_multistep = False
+
+    def step_calculate(self, ode_fun, t, y, step_size, *args, **kwargs):
+        fi = ode_fun(t[0], y, *args)
+        y_pr = y + step_size * fi
+        resid = lambda x: y + step_size/2 * (fi + ode_fun(t[1], x, *args)) - x
+        jac_solv = lambda x: step_size/2*kwargs['jac'](t[1], x, *args) - tf.eye(tf.size(y), dtype=tf.float64)
         y_corr = newtons_method(y_pr, resid, jac_solv)
         err_estimation = tf.zeros(tf.shape(y))
         return y_corr, err_estimation
