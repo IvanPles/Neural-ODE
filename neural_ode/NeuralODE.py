@@ -147,7 +147,7 @@ class NeuralODE:
                 lambda t: tf.ones((1, self.n_external), dtype=tf.float64) * external_scale
             kwargs['x_external'] = x_external_interp
         #
-        if self.solver.is_implicit:
+        if self.solver.requires_jacobian:
             kwargs['jac'] = self.grad_inps_wrap
         for i in range(n_epoch):
             with tf.GradientTape() as tape:
@@ -171,7 +171,7 @@ class NeuralODE:
         step_size = (t_eval[1] - t_eval[0]) / self.n_ref
         t_span = tf.concat((t_eval[0], t_eval[-1]), axis=0)
         #
-        if self.solver.is_implicit:
+        if self.solver.requires_jacobian:
             kwargs['jac'] = self.grad_inps_wrap
         sol, _ = self.solver(self.ode_wrap, t_span, y0, step_size=step_size, **kwargs)
         return sol

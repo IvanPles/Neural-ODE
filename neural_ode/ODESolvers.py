@@ -42,7 +42,7 @@ def newtons_method(y0, resid, jac, **opts):
 class ODESolvertf:
 
     def __init__(self):
-        self.is_implicit = False
+        self.requires_jacobian = False
         self.is_multistep = False
 
     def step_calculate(self, ode_fun, t, y, step_size, *args_step, **kwargs_step):
@@ -83,10 +83,10 @@ class ODESolvertf:
         args_step = []
         if 'x_external' in kwargs.keys():
             args_step.append(kwargs['x_external'])
-        if self.is_implicit and 'jac' not in kwargs.keys():
+        if self.requires_jacobian and 'jac' not in kwargs.keys():
             print('Implicit solver needs specified jacobian')
             return None, None
-        if self.is_implicit and 'jac' in kwargs.keys():
+        if self.requires_jacobian and 'jac' in kwargs.keys():
             kwargs_step['jac'] = kwargs['jac']
         N_p = n_step + int(1)
         sol_dict = {}
@@ -130,7 +130,7 @@ class HeunsMethod(ODESolvertf):
 class BackwardEulerMethod(ODESolvertf):
 
     def __init__(self):
-        self.is_implicit = True
+        self.requires_jacobian = True
         self.is_multistep = False
 
     def step_calculate(self, ode_fun, t, y, step_size, *args, **kwargs):
@@ -145,7 +145,7 @@ class BackwardEulerMethod(ODESolvertf):
 class TrapezoidRuleMethod(ODESolvertf):
 
     def __init__(self):
-        self.is_implicit = True
+        self.requires_jacobian = True
         self.is_multistep = False
 
     def step_calculate(self, ode_fun, t, y, step_size, *args, **kwargs):
@@ -156,3 +156,18 @@ class TrapezoidRuleMethod(ODESolvertf):
         y_corr = newtons_method(y_pr, resid, jac_solv)
         err_estimation = tf.zeros(tf.shape(y))
         return y_corr, err_estimation
+
+
+# Taylor series expansion. have to check
+class TaylorSecondOrder(ODESolvertf):
+
+    def __init__(self):
+        self.requires_jacobian = True
+        self.is_multistep = False
+
+    def step_calculate(self, ode_fun, t, y, step_size, *args, **kwargs):
+        fi = ode_fun(t[0], y, *args)
+        jac0 = kwargs['jac'](t[0], y, *args)
+        y_pr = y + step_size * fi + step_size**2/2*tf.matmul(jac0, tf.transpose(fi))
+        err_estimation = tf.zeros(tf.shape(y))
+        return y_pr, err_estimation
