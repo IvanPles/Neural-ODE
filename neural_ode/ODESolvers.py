@@ -168,6 +168,6 @@ class TaylorSecondOrder(ODESolvertf):
     def step_calculate(self, ode_fun, t, y, step_size, *args, **kwargs):
         fi = ode_fun(t[0], y, *args)
         jac0 = kwargs['jac'](t[0], y, *args)
-        y_pr = y + step_size * fi + step_size**2/2*tf.matmul(jac0, tf.transpose(fi))
+        y_pr = y + step_size * fi + step_size**2/2 * tf.matmul(jac0, tf.transpose(fi))
         err_estimation = tf.zeros(tf.shape(y))
         return y_pr, err_estimation
