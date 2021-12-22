@@ -237,27 +237,35 @@ class NeuralODE:
         a = self.backward_solve(t_eval, dL_dy, aug_dyn_fun, **kwargs)
         return loss, dL_dy, a
 
-    def usual_method(self, t_eval, y_target, **kwargs):
+    def usual_method(self, t_eval, y_target, adapt_initial={}, **kwargs):
         """
         Method to get gradients using direct automatic differentiation
         :param t_eval:
         :param y_target:
+        :param adapt_initial:
         :param kwargs:
         :return:
         """
-        if missing_data:
-            print('lol')
+        if adapt_initial:
+            adapted_deriv = adapt_initial['adapted_deriv']
+            y0 = tf.concat(y_target[0, :], adapted_deriv, axis=0)
         else:
             y0 = y_target[0, :]
         with tf.GradientTape() as tape:
+            if adapt_initial:
+                tape.watch(y0)
             sol = self.forward_solve(t_eval, y_target[0, :], **kwargs)
             y_pred = sol['y'][::self.n_ref, :]
             loss = self.loss_func(y_target, y_pred)
         dL_dp = tape.gradient(loss, self.model.trainable_variables)
+        # how to add gradient to initial condition
+        if adapt_initial:
+            dL_dy0 = tape.gradient(loss, y0)
+            dL_dy0 = dL_dy0[:, self.n_dynamic:]
         return loss, dL_dp
 
     def fit(self, t_eval, y_target, n_epoch=20, n_fold=5, adjoint_method=False,
-            opt=tf.keras.optimizers.Adam(learning_rate=0.05), missing_data = [], **kwargs):
+            opt=tf.keras.optimizers.Adam(learning_rate=0.05), missing_derivative=[], **kwargs):
         """
         Method to fit model to target data
         :param t_eval:
@@ -266,7 +274,7 @@ class NeuralODE:
         :param n_fold:
         :param adjoint_method:
         :param opt:
-        :param missing_data:
+        :param missing_derivative: list of derivatives in data that are missing
         :param kwargs:
         :return:
         """
@@ -293,12 +301,12 @@ class NeuralODE:
         else:
             ix_list = [np.arange(0, len(t_eval))]
         # ToDo missing data implementation ?
-        if missing_data:
+        if missing_derivative:
             add_init = []
-            for ix_train in ix_list:
-                ix = 0
-                add_init = \
-                    [tf.Variable(y_target[ix_train[1], ix]) - tf.Variable(y_target[ix_train[0], ix])]
+            for deriv_ix in missing_derivative:
+                for ix_train in ix_list:
+                    add_init = \
+                        [tf.Variable(y_target[ix_train[1], deriv_ix]) - tf.Variable(y_target[ix_train[0], deriv_ix])]
         loss_list = []
         # start epochs
         t_tot = time.time()
@@ -317,8 +325,7 @@ class NeuralODE:
                     grads_list = self.unflatten_param(grads_p)
                 else:
                     loss, grads_list = self.usual_method(tf.gather(t_eval, indices=ix_train),
-                                                         tf.gather(y_target, indices=ix_train),
-                                                         **dict_external)
+                                                         tf.gather(y_target, indices=ix_train), **dict_external)
                 epoch_loss += loss
                 opt.apply_gradients(zip(grads_list, self.model.trainable_variables))
                 # print('Batch finished')
