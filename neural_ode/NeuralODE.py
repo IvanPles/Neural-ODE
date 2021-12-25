@@ -106,7 +106,6 @@ class NeuralODE:
         for var in self.model.variables:
             n = tf.size(var)
             if len(tf.shape(p)) > 1:
-                print(p)
                 list_p.append(tf.reshape(tf.constant(p[0, ix:ix + n]), tf.shape(var)))
             else:
                 list_p.append(tf.reshape(tf.constant(p[ix:ix + n]), tf.shape(var)))
@@ -265,7 +264,7 @@ class NeuralODE:
         return loss, dL_dp
 
     def fit(self, t_eval, y_target, n_epoch=20, n_fold=5, adjoint_method=False,
-            opt=tf.keras.optimizers.Adam(learning_rate=0.05), missing_derivative=[], **kwargs):
+            opt=tf.keras.optimizers.SGD(learning_rate=0.05), missing_derivative=[], conjugate=False, **kwargs):
         """
         Method to fit model to target data
         :param t_eval:
@@ -275,6 +274,7 @@ class NeuralODE:
         :param adjoint_method:
         :param opt:
         :param missing_derivative: list of derivatives in data that are missing
+        :param conjugate:
         :param kwargs:
         :return:
         """
@@ -308,6 +308,15 @@ class NeuralODE:
                     add_init = \
                         [tf.Variable(y_target[ix_train[1], deriv_ix]) - tf.Variable(y_target[ix_train[0], deriv_ix])]
         loss_list = []
+        #
+        if conjugate:
+            grad_prev = tf.concat([tf.zeros(tf.size(x), dtype=tf.float64) for x in self.model.variables], axis=0)
+            grad_prev = tf.expand_dims(grad_prev, axis=0)
+            d_prev = tf.concat([tf.zeros(tf.size(x), dtype=tf.float64) for x in self.model.variables], axis=0)
+            d_prev = tf.expand_dims(d_prev, axis=0)
+            n_restart = self.n_var*2
+            print(n_restart)
+            conj_iter = 0
         # start epochs
         t_tot = time.time()
         for i in range(n_epoch):
@@ -327,6 +336,27 @@ class NeuralODE:
                     loss, grads_list = self.usual_method(tf.gather(t_eval, indices=ix_train),
                                                          tf.gather(y_target, indices=ix_train), **dict_external)
                 epoch_loss += loss
+                #
+                if conjugate:
+                    flatten_grad = tf.concat([tf.reshape(x, (tf.size(x))) for x in grads_list], axis=0)
+                    flatten_grad = tf.expand_dims(flatten_grad, axis=0)
+                    om = tf.matmul((flatten_grad-grad_prev), tf.transpose(flatten_grad))/tf.norm(flatten_grad)
+                    new_dir = -flatten_grad+om*d_prev
+                    grads_list = self.unflatten_param((-1.0)*new_dir)
+                    if conj_iter>n_restart:
+                        conj_iter = 0.0
+                        grad_prev = tf.concat([tf.zeros(tf.size(x), dtype=tf.float64) for x in self.model.variables],
+                                              axis=0)
+                        grad_prev = tf.expand_dims(grad_prev, axis=0)
+                        d_prev = tf.concat([tf.zeros(tf.size(x), dtype=tf.float64) for x in self.model.variables],
+                                           axis=0)
+                        d_prev = tf.expand_dims(d_prev, axis=0)
+                    else:
+                        conj_iter+=1
+                        grad_prev = flatten_grad
+                        d_prev = new_dir
+                #
+
                 opt.apply_gradients(zip(grads_list, self.model.trainable_variables))
                 # print('Batch finished')
                 # print(f'Loss: {loss}')
