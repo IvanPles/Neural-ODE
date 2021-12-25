@@ -175,7 +175,6 @@ class NeuralODE:
         sol, _ = self.solver(self.ode_wrap, t_span, y0, step_size=step_size, **kwargs)
         return sol
 
-
     def aug_dyn(self, t, z_adj, sol_interp, *args):
         """
         Augmented dynamic function for backward integration
@@ -314,8 +313,7 @@ class NeuralODE:
             grad_prev = tf.expand_dims(grad_prev, axis=0)
             d_prev = tf.concat([tf.zeros(tf.size(x), dtype=tf.float64) for x in self.model.variables], axis=0)
             d_prev = tf.expand_dims(d_prev, axis=0)
-            n_restart = self.n_var*2
-            print(n_restart)
+            n_restart = self.n_var * 2
             conj_iter = 0
         # start epochs
         t_tot = time.time()
@@ -340,10 +338,10 @@ class NeuralODE:
                 if conjugate:
                     flatten_grad = tf.concat([tf.reshape(x, (tf.size(x))) for x in grads_list], axis=0)
                     flatten_grad = tf.expand_dims(flatten_grad, axis=0)
-                    om = tf.matmul((flatten_grad-grad_prev), tf.transpose(flatten_grad))/tf.norm(flatten_grad)
-                    new_dir = -flatten_grad+om*d_prev
-                    grads_list = self.unflatten_param((-1.0)*new_dir)
-                    if conj_iter>n_restart:
+                    om = tf.matmul((flatten_grad - grad_prev), tf.transpose(flatten_grad)) / tf.norm(flatten_grad)
+                    new_dir = -flatten_grad + om * d_prev
+                    grads_list = self.unflatten_param((-1.0) * new_dir)
+                    if conj_iter > n_restart:
                         conj_iter = 0.0
                         grad_prev = tf.concat([tf.zeros(tf.size(x), dtype=tf.float64) for x in self.model.variables],
                                               axis=0)
@@ -352,11 +350,10 @@ class NeuralODE:
                                            axis=0)
                         d_prev = tf.expand_dims(d_prev, axis=0)
                     else:
-                        conj_iter+=1
+                        conj_iter += 1
                         grad_prev = flatten_grad
                         d_prev = new_dir
                 #
-
                 opt.apply_gradients(zip(grads_list, self.model.trainable_variables))
                 # print('Batch finished')
                 # print(f'Loss: {loss}')
