@@ -60,5 +60,5 @@ t_target = tf.constant(sol.t)
 y_target = tf.constant(np.transpose(sol.y) )
 
 
-n_epoch = 40
-n_ode.fit(t_target, y_target, n_epoch=n_epoch, n_fold=10, adjoint_method=False, conjugate=True, )
+n_epoch = 2
+n_ode.fit(t_target, y_target, n_epoch=n_epoch, n_fold=10, adjoint_method=False )

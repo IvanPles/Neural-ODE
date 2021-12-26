@@ -1,6 +1,7 @@
 import tensorflow as tf
 
 
+# experimantal method. Check compatibility with tf optimizer
 class ConjugateGradientMethod:
 
         def __init__(self, **kwargs):
@@ -14,7 +15,7 @@ class ConjugateGradientMethod:
             self.learning_rate = 0.1
             self.iter = 0
 
-        def apply_gradients(self, grads):
+        def apply_gradients(self, grads, vars):
             flatten_grad = [tf.reshape( x, (tf.size(x)) ) for x in grads]
             flatten_grad = tf.concat(flatten_grad, axis=0)
             if self.prev_d is None:
@@ -22,3 +23,4 @@ class ConjugateGradientMethod:
                 self.prev_grad = tf.zeros(tf.size(flatten_grad))
             om = tf.matmul((flatten_grad - self.prev_grad)*tf.transpose(flatten_grad))/tf.norm(flatten_grad)
             new_dir = -flatten_grad+om*self.prev_d
+            vars.assign_add(new_dir*self.learning_rate)
