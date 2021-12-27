@@ -48,7 +48,7 @@ class ODESolvertf:
     def step_calculate(self, ode_fun, t, y, step_size, *args_step, **kwargs_step):
         """
 
-        :param ode_fun: function fir derivatives
+        :param ode_fun: function for derivatives
         :param t: current time and next time
         :param y: current value of unknown variable
         :param step_size:

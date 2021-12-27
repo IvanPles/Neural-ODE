@@ -13,7 +13,7 @@ from tensorflow.keras import layers
 from neural_ode.ODESolvers import HeunsMethod
 
 
-# TODO: add missing variable, add derivatives, add construction of model
+#
 class NeuralODE:
 
     def __init__(self, model, n_dynamic,
@@ -246,12 +246,15 @@ class NeuralODE:
         with tf.GradientTape(persistent=True) as tape:
             if 'adapt_initial' in kwargs.keys():
                 adapted_deriv = kwargs['adapt_initial']
-                y0 = tf.concat(y_target[0, :], adapted_deriv, axis=0)
                 tape.watch(adapted_deriv)
+                y0 = tf.concat([y_target[0, :], adapted_deriv], axis=0)
+                n_tar = tf.size(y_target[0, :])
             else:
                 y0 = y_target[0, :]
             sol = self.forward_solve(t_eval, y0, **kwargs)
             y_pred = sol['y'][::self.n_ref, :]
+            if 'adapt_initial' in kwargs.keys():
+                y_pred = y_pred[:, 0:n_tar]
             loss = self.loss_func(y_target, y_pred)
         dL_dp = tape.gradient(loss, self.model.trainable_variables)
         grad_dict = {'dL_dp': dL_dp}
@@ -291,22 +294,25 @@ class NeuralODE:
         #
         shuffle_folds = True
         # create folds
-        if n_fold > 2:
+        if n_fold > 1:
             kf = KFold(n_splits=n_fold)
             ix_list = [ix_train for __, ix_train in kf.split(t_eval)]
         else:
             ix_list = [np.arange(0, len(t_eval))]
         mis_deriv = False
-        # ToDo missing data implementation check !?
+        #
         if 'missing_derivative' in kwargs.keys():
             mis_deriv = True
-            lr_in = tf.constant(0.2, dtype=tf.float64)
-            add_init = []
+            lr_init = tf.constant(0.1, dtype=tf.float64)
+            dt = t_eval[1] - t_eval[0]
+            adapt_initial = []
             for deriv_ix in kwargs['missing_derivative']:
                 for ix_train in ix_list:
-                    add_init = \
-                        [tf.Variable(y_target[ix_train[1], deriv_ix]) -
-                         tf.Variable(y_target[ix_train[0], deriv_ix])]
+                    deriv = (tf.gather(y_target[ix_train[1], :], indices=deriv_ix) -
+                             tf.gather(y_target[ix_train[0], :], indices=deriv_ix)) / dt
+                    if len(deriv.shape) < 1:
+                        deriv = tf.expand_dims(deriv, axis=0)
+                    adapt_initial.append(tf.Variable(deriv))
         loss_list = []
         # start epochs
         t_tot = time.time()
@@ -316,16 +322,16 @@ class NeuralODE:
             epoch_loss = 0.0
             if shuffle_folds:
                 if mis_deriv:
-                    to_shuffle = list(zip(ix_list, add_init))
+                    to_shuffle = list(zip(ix_list, adapt_initial))
                     shuffle(to_shuffle)
-                    ix_list, add_init = zip(*to_shuffle)
+                    ix_list, adapt_initial = zip(*to_shuffle)
                     ix_list = list(ix_list)
-                    add_init = list(add_init)
+                    adapt_initial = list(adapt_initial)
                 else:
                     shuffle(ix_list)
             for ix, ix_train in enumerate(ix_list):
                 if mis_deriv:
-                    dict_kw['adapt_initial'] = add_init[ix]
+                    dict_kw['adapt_initial'] = adapt_initial[ix]
                 if adjoint_method:
                     loss, dL_dy, a = self.adjoint_method(tf.gather(t_eval, indices=ix_train),
                                                          tf.gather(y_target, indices=ix_train),
@@ -337,7 +343,7 @@ class NeuralODE:
                                                          tf.gather(y_target, indices=ix_train), **dict_kw)
                     grads_list = grads_dict['dL_dp']
                     if mis_deriv:
-                        add_init[ix].assign_sub(grads_dict['dL_dy0'] * lr_in)
+                        adapt_initial[ix].assign_sub(grads_dict['dL_dy0'] * lr_init)
                 epoch_loss += loss
                 opt.apply_gradients(zip(grads_list, self.model.trainable_variables))
                 # print('Batch finished')
@@ -353,8 +359,8 @@ class NeuralODE:
         ax.plot(loss_list)
         # build solution and compare
         if mis_deriv:
-            init_cond = [add_init[ix] for ix, ix_train in enumerate(ix_list) if ix_train[ix] == 0][0]
-            y0 = tf.concat(y_target[0, :], init_cond, axis=0)
+            init_cond = [adapt_initial[ix] for ix, ix_train in enumerate(ix_list) if ix_train[0] == 0][0]
+            y0 = tf.concat([y_target[0, :], init_cond], axis=0)
         else:
             y0 = y_target[0, :]
         sol2 = self.forward_solve(t_eval, y0, **dict_kw)
