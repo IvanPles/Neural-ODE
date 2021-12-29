@@ -7,8 +7,6 @@ from random import shuffle
 
 import time
 import tensorflow as tf
-from tensorflow import keras
-from tensorflow.keras import layers
 
 from neural_ode.ODESolvers import HeunsMethod
 
@@ -160,8 +158,8 @@ class NeuralODE:
     def forward_solve(self, t_eval, y0, **kwargs):
         """
         Method to solve model
-        :param t_eval:
-        :param y0:
+        :param t_eval: Time values for data
+        :param y0: Data to fit
         :param kwargs:
         :return:
         """
@@ -194,9 +192,9 @@ class NeuralODE:
     def backward_solve(self, t_eval, dL_dy, aug_dyn, **kwargs):
         """
         Backward solution for adjoint method
-        :param t_eval:
-        :param dL_dy:
-        :param aug_dyn:
+        :param t_eval: Time values for data
+        :param dL_dy: derivatives of loss over output values of model
+        :param aug_dyn: function for augmented dynamics
         :return:
         """
         y_adj0 = tf.concat((dL_dy[-1, :], tf.zeros([self.n_var], dtype=tf.float64)), axis=0)
@@ -215,8 +213,8 @@ class NeuralODE:
     def adjoint_method(self, t_eval, y_target, **kwargs):
         """
         Method to get gradients using adjoint method
-        :param t_eval:
-        :param y_target:
+        :param t_eval: Time values for data
+        :param y_target: Data to fit
         :param kwargs:
         :return:
         """
@@ -238,45 +236,58 @@ class NeuralODE:
     def usual_method(self, t_eval, y_target, **kwargs):
         """
         Method to get gradients using direct automatic differentiation
-        :param t_eval:
-        :param y_target:
-        :param kwargs:
+        :param t_eval: Time values for data
+        :param y_target: Data to fit
+        :param kwargs: missed_initial - tensors of missed initial conditions
+            adjust_initial - boolean whether to calculate gradients for them,
+            x_external - function for evaluating external forcing
         :return:
         """
-        with tf.GradientTape(persistent=True) as tape:
-            if 'adapt_initial' in kwargs.keys():
-                adapted_deriv = kwargs['adapt_initial']
-                tape.watch(adapted_deriv)
-                y0 = tf.concat([y_target[0, :], adapted_deriv], axis=0)
+        #
+        if 'adjust_initial' in kwargs.keys():
+            adjust_initial = kwargs['adjust_initial']
+        else:
+            adjust_initial = False
+        with tf.GradientTape(persistent=adjust_initial) as tape:
+            if 'missed_initial' in kwargs.keys():
+                missed_initial = kwargs['missed_initial']
+                if adjust_initial:
+                    tape.watch(missed_initial)
+                y0 = tf.concat([y_target[0, :], missed_initial], axis=0)
                 n_tar = tf.size(y_target[0, :])
             else:
                 y0 = y_target[0, :]
             sol = self.forward_solve(t_eval, y0, **kwargs)
             y_pred = sol['y'][::self.n_ref, :]
-            if 'adapt_initial' in kwargs.keys():
+            if 'missed_initial' in kwargs.keys():
                 y_pred = y_pred[:, 0:n_tar]
             loss = self.loss_func(y_target, y_pred)
         dL_dp = tape.gradient(loss, self.model.trainable_variables)
         grad_dict = {'dL_dp': dL_dp}
         # how to add gradient to initial condition
-        if 'adapt_initial' in kwargs.keys():
-            dL_dy0 = tape.gradient(loss, adapted_deriv)
+        if adjust_initial:
+            dL_dy0 = tape.gradient(loss, missed_initial)
             grad_dict['dL_dy0'] = dL_dy0
         return loss, grad_dict
 
-    def fit(self, t_eval, y_target, n_epoch=20, n_fold=5, adjoint_method=False,
-            opt=tf.keras.optimizers.Adam(learning_rate=0.05), **kwargs):
+    def fit(self, t_eval, y_target, n_epoch=20, n_batch=5, adjoint_method=False,
+            opt=tf.keras.optimizers.Adam(learning_rate=0.05), **kwargs) -> None:
         """
         Method to fit model to target data
-        :param t_eval:
-        :param y_target:
-        :param n_epoch:
-        :param n_fold:
-        :param adjoint_method:
-        :param opt:
+        :param t_eval: Time values for data
+        :param y_target: Data to fit
+        :param n_epoch: Number of epoch
+        :param n_batch: Number of batches (splitting) of data
+        :param adjoint_method: boolean whether to use adjoint method
+        :param opt: optimizer to use
         :param kwargs:
-        :return:
+            x_external - tensor of external forcing tag ,
+            missing_derivative - list of tags, which derivatives are missing,
+            adjust_initial - boolean whether to adjust initial missing condition or not
+        :return: None
         """
+        # collect kwargs for method
+        kwargs_inp = {}
         if self.n_external > 0:
             if 'x_external' in kwargs.keys():
                 x_external = kwargs['x_external']
@@ -285,34 +296,39 @@ class NeuralODE:
                                                 x_external.numpy(), kind='linear', axis=0)
                 # input for interpolation function should be zero size tensor
                 x_external_interp = lambda t: tf.expand_dims(tf.constant(x_external_interp_np(t)), axis=0)
-                dict_kw = {'x_external': x_external_interp}
+                kwargs_inp = {'x_external': x_external_interp}
             else:
                 print('No external data')
                 return None
-        else:
-            dict_kw = {}
         #
-        shuffle_folds = True
-        # create folds
-        if n_fold > 1:
-            kf = KFold(n_splits=n_fold)
+        shuffle_batches = True
+        # create batches
+        if n_batch > 1:
+            kf = KFold(n_splits=n_batch)
             ix_list = [ix_train for __, ix_train in kf.split(t_eval)]
         else:
             ix_list = [np.arange(0, len(t_eval))]
+        # check whether there are missing derivative and initialise them
         mis_deriv = False
-        #
         if 'missing_derivative' in kwargs.keys():
             mis_deriv = True
-            lr_init = tf.constant(0.1, dtype=tf.float64)
+            if 'adjust_initial' in kwargs.keys():
+                kwargs_inp['adjust_initial'] = kwargs['adjust_initial']
+            else:
+                kwargs_inp['adjust_initial'] = False
+            # initialise learning rate for init conditions
+            if kwargs_inp['adjust_initial']:
+                lr_init = tf.constant(0.1, dtype=tf.float64)
+            # initialise list derivatives for each fold with simplest formula
             dt = t_eval[1] - t_eval[0]
-            adapt_initial = []
+            miss_initial = []
             for deriv_ix in kwargs['missing_derivative']:
                 for ix_train in ix_list:
                     deriv = (tf.gather(y_target[ix_train[1], :], indices=deriv_ix) -
                              tf.gather(y_target[ix_train[0], :], indices=deriv_ix)) / dt
                     if len(deriv.shape) < 1:
                         deriv = tf.expand_dims(deriv, axis=0)
-                    adapt_initial.append(tf.Variable(deriv))
+                    miss_initial.append(tf.Variable(deriv))
         loss_list = []
         # start epochs
         t_tot = time.time()
@@ -320,34 +336,35 @@ class NeuralODE:
             print(f'--- Epoch #{i + 1} ---')
             t_epoch = time.time()
             epoch_loss = 0.0
-            if shuffle_folds:
+            if shuffle_batches:
+                # if there are missing init conditions should shuffle them together with data
                 if mis_deriv:
-                    to_shuffle = list(zip(ix_list, adapt_initial))
+                    to_shuffle = list(zip(ix_list, miss_initial))
                     shuffle(to_shuffle)
-                    ix_list, adapt_initial = zip(*to_shuffle)
+                    ix_list, miss_initial = zip(*to_shuffle)
                     ix_list = list(ix_list)
-                    adapt_initial = list(adapt_initial)
+                    miss_initial = list(miss_initial)
                 else:
                     shuffle(ix_list)
+            # loop over every fold
             for ix, ix_train in enumerate(ix_list):
+                # write missing init cond to kwargs
                 if mis_deriv:
-                    dict_kw['adapt_initial'] = adapt_initial[ix]
+                    kwargs_inp['missed_initial'] = miss_initial[ix]
                 if adjoint_method:
                     loss, dL_dy, a = self.adjoint_method(tf.gather(t_eval, indices=ix_train),
                                                          tf.gather(y_target, indices=ix_train),
-                                                         **dict_kw)
+                                                         **kwargs_inp)
                     grads_p = a[0, self.n_dynamic:]
                     grads_list = self.unflatten_param(grads_p)
                 else:
                     loss, grads_dict = self.usual_method(tf.gather(t_eval, indices=ix_train),
-                                                         tf.gather(y_target, indices=ix_train), **dict_kw)
+                                                         tf.gather(y_target, indices=ix_train), **kwargs_inp)
                     grads_list = grads_dict['dL_dp']
-                    if mis_deriv:
-                        adapt_initial[ix].assign_sub(grads_dict['dL_dy0'] * lr_init)
+                    if kwargs_inp['adjust_initial']:
+                        miss_initial[ix].assign_sub(grads_dict['dL_dy0'] * lr_init)
                 epoch_loss += loss
                 opt.apply_gradients(zip(grads_list, self.model.trainable_variables))
-                # print('Batch finished')
-                # print(f'Loss: {loss}')
             loss_list.append(epoch_loss)
             print(f'Total loss of epoch: {epoch_loss}')
             print(f'Elapsed time for epoch: {time.time() - t_epoch}')
@@ -358,12 +375,13 @@ class NeuralODE:
         ax = plt.gca()
         ax.plot(loss_list)
         # build solution and compare
+        # find missing initial condition for first fold
         if mis_deriv:
-            init_cond = [adapt_initial[ix] for ix, ix_train in enumerate(ix_list) if ix_train[0] == 0][0]
+            init_cond = [miss_initial[ix] for ix, ix_train in enumerate(ix_list) if ix_train[0] == 0][0]
             y0 = tf.concat([y_target[0, :], init_cond], axis=0)
         else:
             y0 = y_target[0, :]
-        sol2 = self.forward_solve(t_eval, y0, **dict_kw)
+        sol2 = self.forward_solve(t_eval, y0, **kwargs_inp)
         fig = plt.figure()
         ax = plt.gca()
         ax.plot(t_eval.numpy(), y_target[:, 0].numpy())

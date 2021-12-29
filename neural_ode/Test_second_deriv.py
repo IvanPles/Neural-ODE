@@ -58,4 +58,5 @@ y_target = tf.expand_dims(tf.constant(np.transpose(sol.y[0, :])), axis=1)
 model.variables[0].assign(np.array([[-k+0.0], [-c]]))
 
 n_epoch = 2
-n_ode.fit(t_target, y_target, n_epoch=n_epoch, n_fold=1, adjoint_method=False, missing_derivative=[0])
+n_ode.fit(t_target, y_target, n_epoch=n_epoch, n_batch=1, adjoint_method=False, missing_derivative=[0],
+          adjust_initial=True)
