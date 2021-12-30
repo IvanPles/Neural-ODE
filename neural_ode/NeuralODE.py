@@ -278,7 +278,7 @@ class NeuralODE:
         :param y_target: Data to fit
         :param n_epoch: Number of epoch
         :param n_batch: Number of batches (splitting) of data
-        :param adjoint_method: boolean whether to use adjoint method
+        :param adjoint_method: boolean value whether to use adjoint method
         :param opt: optimizer to use
         :param kwargs:
             x_external - tensor of external forcing tag ,
