@@ -310,16 +310,18 @@ class NeuralODE:
             ix_list = [np.arange(0, len(t_eval))]
         # check whether there are missing derivative and initialise them
         mis_deriv = False
+        adjust_initial = False
         if 'missing_derivative' in kwargs.keys():
             mis_deriv = True
             if 'adjust_initial' in kwargs.keys():
                 kwargs_inp['adjust_initial'] = kwargs['adjust_initial']
             else:
                 kwargs_inp['adjust_initial'] = False
+            adjust_initial = kwargs_inp['adjust_initial']
             # initialise learning rate for init conditions
             if kwargs_inp['adjust_initial']:
                 lr_init = tf.constant(0.1, dtype=tf.float64)
-            # initialise list derivatives for each fold with simplest formula
+            # initialise list derivatives for each fold with the simplest formula
             dt = t_eval[1] - t_eval[0]
             miss_initial = []
             for deriv_ix in kwargs['missing_derivative']:
@@ -361,7 +363,7 @@ class NeuralODE:
                     loss, grads_dict = self.usual_method(tf.gather(t_eval, indices=ix_train),
                                                          tf.gather(y_target, indices=ix_train), **kwargs_inp)
                     grads_list = grads_dict['dL_dp']
-                    if kwargs_inp['adjust_initial']:
+                    if adjust_initial:
                         miss_initial[ix].assign_sub(grads_dict['dL_dy0'] * lr_init)
                 epoch_loss += loss
                 opt.apply_gradients(zip(grads_list, self.model.trainable_variables))
